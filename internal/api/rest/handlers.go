@@ -55,6 +55,20 @@ func (h *Handler) GetLiveGames(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, games)
 }
 
+// CleanupStaleGames marks old "in_progress" games as "final"
+func (h *Handler) CleanupStaleGames(w http.ResponseWriter, r *http.Request) {
+	count, err := h.gameService.CleanupStaleGames(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to cleanup stale games", err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"message":       "Stale games cleaned up",
+		"games_updated": count,
+	})
+}
+
 // GetGamesByDate returns all games on a specific date
 func (h *Handler) GetGamesByDate(w http.ResponseWriter, r *http.Request) {
 	dateStr := r.URL.Query().Get("date")
@@ -94,6 +108,20 @@ func (h *Handler) GetUpcomingGames(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, games)
+}
+
+// GetTodaysGames returns all games for today (live, scheduled, final)
+func (h *Handler) GetTodaysGames(w http.ResponseWriter, r *http.Request) {
+	games, err := h.gameService.GetTodaysGames(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to fetch today's games", err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"games": games,
+		"count": len(games),
+	})
 }
 
 // GetGame returns a specific game by ID

@@ -37,7 +37,9 @@ func NewServer(port string, db *store.Database, backfillSvc *backfill.Service) *
 
 	// Games
 	api.HandleFunc("/games/live", handler.GetLiveGames).Methods("GET")
+	api.HandleFunc("/games/today", handler.GetTodaysGames).Methods("GET")
 	api.HandleFunc("/games/upcoming", handler.GetUpcomingGames).Methods("GET")
+	api.HandleFunc("/games/cleanup", handler.CleanupStaleGames).Methods("POST")
 	api.HandleFunc("/games", handler.GetGamesByDate).Methods("GET")
 	api.HandleFunc("/games/{gameID}", handler.GetGame).Methods("GET")
 	api.HandleFunc("/games/{gameID}/boxscore", handler.GetGameBoxScore).Methods("GET")

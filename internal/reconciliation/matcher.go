@@ -119,6 +119,19 @@ func (m *Matcher) MatchAndReconcileAll(espnGames []*store.Game, googleGames []go
 	var reconciledGames []*store.Game
 	matchedGoogleGames := make(map[int]bool)
 	
+	// Determine season_id from existing ESPN games or use default
+	seasonID := 1 // Default
+	if len(espnGames) > 0 {
+		seasonID = espnGames[0].SeasonID
+	}
+	
+	// Build team abbreviation -> ID lookup from the matcher's teamAbbreviations (reverse map)
+	// Note: teamAbbreviations is teamID -> abbr, we need abbr -> teamID
+	abbrToID := make(map[string]int)
+	for teamID, abbr := range m.teamAbbreviations {
+		abbrToID[abbr] = teamID
+	}
+	
 	// Process ESPN games and find matching Google games
 	for _, espnGame := range espnGames {
 		googleGame := m.FindMatchingGoogleGame(espnGame, googleGames)
@@ -148,9 +161,8 @@ func (m *Matcher) MatchAndReconcileAll(espnGames []*store.Game, googleGames []go
 	// (These are games ESPN doesn't know about yet)
 	for i, googleGame := range googleGames {
 		if !matchedGoogleGames[i] {
-			// Convert to store.Game format  
-			// TODO: Get actual season_id dynamically instead of hardcoding
-			game := google.ConvertToStoreGame(googleGame, 1)
+			// Convert to store.Game format with team lookup
+			game := google.ConvertToStoreGameWithTeams(googleGame, seasonID, abbrToID)
 			reconciledGames = append(reconciledGames, game)
 		}
 	}

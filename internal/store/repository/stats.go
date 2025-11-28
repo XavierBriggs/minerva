@@ -73,6 +73,19 @@ func (r *StatsRepository) GetGameBoxScore(ctx context.Context, gameID string) ([
 	return r.scanPlayerStats(rows)
 }
 
+// EnrichedPlayerStats includes player game stats with game context (date, opponent)
+type EnrichedPlayerStats struct {
+	*store.PlayerGameStats
+	GameDate       string `json:"game_date"`
+	OpponentTeamID int    `json:"opponent_team_id"`
+	OpponentAbbr   string `json:"opponent_abbr"`
+	OpponentName   string `json:"opponent_name"`
+	IsHome         bool   `json:"is_home"`
+	HomeScore      int    `json:"home_score"`
+	AwayScore      int    `json:"away_score"`
+	Result         string `json:"result"` // "W" or "L"
+}
+
 // GetPlayerRecentStats returns a player's stats for their last N games
 func (r *StatsRepository) GetPlayerRecentStats(ctx context.Context, playerID int, limit int) ([]*store.PlayerGameStats, error) {
 	query := `
@@ -98,8 +111,96 @@ func (r *StatsRepository) GetPlayerRecentStats(ctx context.Context, playerID int
 	return r.scanPlayerStats(rows)
 }
 
+// GetPlayerRecentStatsEnriched returns a player's stats with full game context
+func (r *StatsRepository) GetPlayerRecentStatsEnriched(ctx context.Context, playerID int, limit int) ([]*EnrichedPlayerStats, error) {
+	query := `
+		SELECT 
+			pgs.stat_id, pgs.game_id, pgs.player_id, pgs.team_id, pgs.points, pgs.rebounds, pgs.assists,
+			pgs.steals, pgs.blocks, pgs.turnovers, pgs.field_goals_made, pgs.field_goals_attempted,
+			pgs.three_pointers_made, pgs.three_pointers_attempted, pgs.free_throws_made,
+			pgs.free_throws_attempted, pgs.offensive_rebounds, pgs.defensive_rebounds,
+			pgs.personal_fouls, pgs.minutes_played, pgs.plus_minus, pgs.starter,
+			pgs.true_shooting_pct, pgs.effective_fg_pct, pgs.usage_rate, pgs.created_at, pgs.updated_at,
+			g.game_date,
+			g.home_team_id, g.away_team_id,
+			COALESCE(g.home_score, 0) as home_score,
+			COALESCE(g.away_score, 0) as away_score,
+			CASE WHEN pgs.team_id = g.home_team_id THEN g.away_team_id ELSE g.home_team_id END as opponent_team_id,
+			CASE WHEN pgs.team_id = g.home_team_id THEN true ELSE false END as is_home,
+			opp.abbreviation as opponent_abbr,
+			opp.full_name as opponent_name
+		FROM player_game_stats pgs
+		JOIN games g ON pgs.game_id = g.game_id
+		LEFT JOIN teams opp ON opp.team_id = CASE WHEN pgs.team_id = g.home_team_id THEN g.away_team_id ELSE g.home_team_id END
+		WHERE pgs.player_id = $1 AND g.status = 'final'
+		ORDER BY g.game_date DESC
+		LIMIT $2
+	`
+
+	rows, err := r.db.DB().QueryContext(ctx, query, playerID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("querying enriched stats: %w", err)
+	}
+	defer rows.Close()
+
+	var allStats []*EnrichedPlayerStats
+	for rows.Next() {
+		stats := &store.PlayerGameStats{}
+		enriched := &EnrichedPlayerStats{PlayerGameStats: stats}
+		var gameDate sql.NullTime
+		var homeTeamID, awayTeamID int
+		var oppAbbr, oppName sql.NullString
+
+		err := rows.Scan(
+			&stats.ID, &stats.GameID, &stats.PlayerID, &stats.TeamID, &stats.Points, &stats.Rebounds,
+			&stats.Assists, &stats.Steals, &stats.Blocks, &stats.Turnovers, &stats.FieldGoalsMade,
+			&stats.FieldGoalsAttempted, &stats.ThreePointersMade, &stats.ThreePointersAttempted,
+			&stats.FreeThrowsMade, &stats.FreeThrowsAttempted, &stats.OffensiveRebounds,
+			&stats.DefensiveRebounds, &stats.PersonalFouls, &stats.MinutesPlayed, &stats.PlusMinus,
+			&stats.Starter, &stats.TrueShootingPct, &stats.EffectiveFGPct, &stats.UsageRate,
+			&stats.CreatedAt, &stats.UpdatedAt,
+			&gameDate,
+			&homeTeamID, &awayTeamID,
+			&enriched.HomeScore, &enriched.AwayScore,
+			&enriched.OpponentTeamID, &enriched.IsHome,
+			&oppAbbr, &oppName,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scanning enriched stats: %w", err)
+		}
+
+		if gameDate.Valid {
+			enriched.GameDate = gameDate.Time.Format("2006-01-02")
+		}
+		if oppAbbr.Valid {
+			enriched.OpponentAbbr = oppAbbr.String
+		}
+		if oppName.Valid {
+			enriched.OpponentName = oppName.String
+		}
+
+		// Calculate result
+		playerTeamScore := enriched.AwayScore
+		oppTeamScore := enriched.HomeScore
+		if enriched.IsHome {
+			playerTeamScore = enriched.HomeScore
+			oppTeamScore = enriched.AwayScore
+		}
+		if playerTeamScore > oppTeamScore {
+			enriched.Result = "W"
+		} else {
+			enriched.Result = "L"
+		}
+
+		allStats = append(allStats, enriched)
+	}
+
+	return allStats, rows.Err()
+}
+
 // GetPlayerSeasonAverages calculates a player's season averages
-func (r *StatsRepository) GetPlayerSeasonAverages(ctx context.Context, playerID int, seasonID string) (map[string]float64, error) {
+// seasonYear is a string like "2024-25" which maps to a season_id in the seasons table
+func (r *StatsRepository) GetPlayerSeasonAverages(ctx context.Context, playerID int, seasonYear string) (map[string]float64, error) {
 	query := `
 		SELECT
 			COUNT(*) as games_played,
@@ -115,14 +216,15 @@ func (r *StatsRepository) GetPlayerSeasonAverages(ctx context.Context, playerID 
 			SUM(free_throws_made)::float / NULLIF(SUM(free_throws_attempted), 0) as ft_pct
 		FROM player_game_stats pgs
 		JOIN games g ON pgs.game_id = g.game_id
-		WHERE pgs.player_id = $1 AND g.season_id = $2 AND g.status = 'final'
+		JOIN seasons s ON g.season_id = s.season_id
+		WHERE pgs.player_id = $1 AND s.season_year = $2 AND g.status = 'final'
 	`
 
 	var gamesPlayed int
 	var ppg, rpg, apg, spg, bpg, tpg, mpg sql.NullFloat64
 	var fgPct, threePct, ftPct sql.NullFloat64
 
-	err := r.db.DB().QueryRowContext(ctx, query, playerID, seasonID).Scan(
+	err := r.db.DB().QueryRowContext(ctx, query, playerID, seasonYear).Scan(
 		&gamesPlayed, &ppg, &rpg, &apg, &spg, &bpg, &tpg, &mpg, &fgPct, &threePct, &ftPct,
 	)
 
@@ -290,4 +392,3 @@ func (r *StatsRepository) UpsertTeamStats(ctx context.Context, stats *store.Team
 
 	return nil
 }
-

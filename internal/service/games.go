@@ -77,6 +77,16 @@ func (s *GameService) GetUpcomingGames(ctx context.Context, limit int) ([]*GameS
 	return s.enrichGamesWithTeams(ctx, games)
 }
 
+// GetTodaysGames retrieves all games for today (live, scheduled, and final)
+func (s *GameService) GetTodaysGames(ctx context.Context) ([]*GameSummary, error) {
+	games, err := s.gameRepo.GetTodaysGames(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("fetching today's games: %w", err)
+	}
+
+	return s.enrichGamesWithTeams(ctx, games)
+}
+
 // GetTeamSchedule retrieves games for a specific team
 func (s *GameService) GetTeamSchedule(ctx context.Context, teamID int, seasonID int, limit int) ([]*GameSummary, error) {
 	games, err := s.gameRepo.GetByTeam(ctx, teamID, seasonID, limit)
@@ -85,6 +95,15 @@ func (s *GameService) GetTeamSchedule(ctx context.Context, teamID int, seasonID 
 	}
 
 	return s.enrichGamesWithTeams(ctx, games)
+}
+
+// CleanupStaleGames marks old "in_progress" games as "final"
+func (s *GameService) CleanupStaleGames(ctx context.Context) (int64, error) {
+	count, err := s.gameRepo.CleanupStaleGames(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("cleaning up stale games: %w", err)
+	}
+	return count, nil
 }
 
 // enrichGamesWithTeams adds team details to games

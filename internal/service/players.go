@@ -90,9 +90,9 @@ func (s *PlayerService) GetTeamRoster(ctx context.Context, teamID int) ([]*Playe
 	return profiles, nil
 }
 
-// GetPlayerStats retrieves a player's recent game stats
-func (s *PlayerService) GetPlayerStats(ctx context.Context, playerID int, limit int) ([]*store.PlayerGameStats, error) {
-	stats, err := s.statsRepo.GetPlayerRecentStats(ctx, playerID, limit)
+// GetPlayerStats retrieves a player's recent game stats with enriched game context
+func (s *PlayerService) GetPlayerStats(ctx context.Context, playerID int, limit int) ([]*repository.EnrichedPlayerStats, error) {
+	stats, err := s.statsRepo.GetPlayerRecentStatsEnriched(ctx, playerID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("fetching player stats: %w", err)
 	}

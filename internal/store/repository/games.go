@@ -81,7 +81,7 @@ func (r *GameRepository) GetByDate(ctx context.Context, date time.Time) ([]*stor
 	// Truncate to start of day and get the next day
 	startOfDay := date.Truncate(24 * time.Hour)
 	endOfDay := startOfDay.Add(24 * time.Hour)
-	
+
 	query := `
 		SELECT game_id, sport, season_id, external_id, game_date, game_time,
 			home_team_id, away_team_id, home_score, away_score, status,
@@ -101,17 +101,28 @@ func (r *GameRepository) GetByDate(ctx context.Context, date time.Time) ([]*stor
 }
 
 // GetLiveGames returns all currently live games
+// Only returns games from today (EST) to avoid stale data
 func (r *GameRepository) GetLiveGames(ctx context.Context) ([]*store.Game, error) {
+	// Get today's date range in EST
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		loc = time.UTC
+	}
+	nowEST := time.Now().In(loc)
+	startOfDay := time.Date(nowEST.Year(), nowEST.Month(), nowEST.Day(), 0, 0, 0, 0, loc)
+	endOfDay := startOfDay.Add(24 * time.Hour)
+
 	query := `
 		SELECT game_id, sport, season_id, external_id, game_date, game_time,
 			home_team_id, away_team_id, home_score, away_score, status,
 			period, clock, venue, attendance, metadata, created_at, updated_at
 		FROM games
-		WHERE status = 'in_progress'
+		WHERE status = 'in_progress' 
+			AND game_date >= $1 AND game_date < $2
 		ORDER BY updated_at DESC
 	`
 
-	rows, err := r.db.DB().QueryContext(ctx, query)
+	rows, err := r.db.DB().QueryContext(ctx, query, startOfDay, endOfDay)
 	if err != nil {
 		return nil, fmt.Errorf("querying live games: %w", err)
 	}
@@ -120,19 +131,64 @@ func (r *GameRepository) GetLiveGames(ctx context.Context) ([]*store.Game, error
 	return r.scanGames(rows)
 }
 
-// GetUpcomingGames returns upcoming scheduled games
-func (r *GameRepository) GetUpcomingGames(ctx context.Context, limit int) ([]*store.Game, error) {
+// GetTodaysGames returns all games scheduled for today (any status)
+// Uses Eastern Time since NBA games are scheduled in EST
+func (r *GameRepository) GetTodaysGames(ctx context.Context) ([]*store.Game, error) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		loc = time.UTC
+	}
+	nowEST := time.Now().In(loc)
+	startOfDay := time.Date(nowEST.Year(), nowEST.Month(), nowEST.Day(), 0, 0, 0, 0, loc)
+	endOfDay := startOfDay.Add(24 * time.Hour)
+
 	query := `
 		SELECT game_id, sport, season_id, external_id, game_date, game_time,
 			home_team_id, away_team_id, home_score, away_score, status,
 			period, clock, venue, attendance, metadata, created_at, updated_at
 		FROM games
-		WHERE status = 'scheduled' AND game_date >= CURRENT_DATE
-		ORDER BY game_date, game_time
-		LIMIT $1
+		WHERE game_date >= $1 AND game_date < $2
+		ORDER BY 
+			CASE status 
+				WHEN 'in_progress' THEN 1 
+				WHEN 'scheduled' THEN 2 
+				WHEN 'final' THEN 3 
+				ELSE 4 
+			END,
+			game_time
 	`
 
-	rows, err := r.db.DB().QueryContext(ctx, query, limit)
+	rows, err := r.db.DB().QueryContext(ctx, query, startOfDay, endOfDay)
+	if err != nil {
+		return nil, fmt.Errorf("querying today's games: %w", err)
+	}
+	defer rows.Close()
+
+	return r.scanGames(rows)
+}
+
+// GetUpcomingGames returns upcoming scheduled games
+// Uses Eastern Time (America/New_York) since NBA games are scheduled in EST
+func (r *GameRepository) GetUpcomingGames(ctx context.Context, limit int) ([]*store.Game, error) {
+	// Get current date in EST for proper comparison
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		loc = time.UTC // Fallback to UTC if timezone not available
+	}
+	nowEST := time.Now().In(loc)
+	todayEST := nowEST.Truncate(24 * time.Hour)
+
+	query := `
+		SELECT game_id, sport, season_id, external_id, game_date, game_time,
+			home_team_id, away_team_id, home_score, away_score, status,
+			period, clock, venue, attendance, metadata, created_at, updated_at
+		FROM games
+		WHERE status = 'scheduled' AND game_date >= $1
+		ORDER BY game_date, game_time
+		LIMIT $2
+	`
+
+	rows, err := r.db.DB().QueryContext(ctx, query, todayEST, limit)
 	if err != nil {
 		return nil, fmt.Errorf("querying upcoming games: %w", err)
 	}
@@ -220,6 +276,28 @@ func (r *GameRepository) Upsert(ctx context.Context, game *store.Game) error {
 	return nil
 }
 
+// CleanupStaleGames marks games older than 6 hours with "in_progress" status as "final"
+// This fixes stuck games that never had their status updated
+func (r *GameRepository) CleanupStaleGames(ctx context.Context) (int64, error) {
+	// Any game that started more than 6 hours ago and is still "in_progress" is almost certainly finished
+	// NBA games typically last about 2.5 hours
+	staleThreshold := time.Now().Add(-6 * time.Hour)
+
+	query := `
+		UPDATE games 
+		SET status = 'final', updated_at = NOW()
+		WHERE status = 'in_progress' 
+			AND game_time < $1
+	`
+
+	result, err := r.db.DB().ExecContext(ctx, query, staleThreshold)
+	if err != nil {
+		return 0, fmt.Errorf("cleaning up stale games: %w", err)
+	}
+
+	return result.RowsAffected()
+}
+
 // scanGames scans multiple game rows
 func (r *GameRepository) scanGames(rows *sql.Rows) ([]*store.Game, error) {
 	var games []*store.Game
@@ -239,4 +317,3 @@ func (r *GameRepository) scanGames(rows *sql.Rows) ([]*store.Game, error) {
 
 	return games, rows.Err()
 }
-
