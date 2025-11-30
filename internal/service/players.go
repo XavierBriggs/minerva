@@ -115,4 +115,3 @@ type PlayerProfile struct {
 	Player *store.Player `json:"player"`
 	Team   *store.Team   `json:"team,omitempty"`
 }
-

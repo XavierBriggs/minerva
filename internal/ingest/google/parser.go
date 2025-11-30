@@ -279,7 +279,7 @@ func ConvertToStoreGame(liveGame LiveGame, seasonID int) *store.Game {
 	// Team IDs - try to resolve from abbreviation lookup
 	// These will be set properly during reconciliation with ESPN data
 	// or looked up from the database by the caller
-	game.HomeTeamID = 0  // 0 = unresolved, will be matched during reconciliation
+	game.HomeTeamID = 0 // 0 = unresolved, will be matched during reconciliation
 	game.AwayTeamID = 0
 
 	return game
@@ -288,12 +288,12 @@ func ConvertToStoreGame(liveGame LiveGame, seasonID int) *store.Game {
 // ConvertToStoreGameWithTeams converts a Google LiveGame to a store.Game with team ID lookup
 func ConvertToStoreGameWithTeams(liveGame LiveGame, seasonID int, teamLookup map[string]int) *store.Game {
 	game := ConvertToStoreGame(liveGame, seasonID)
-	
+
 	// Try to resolve team IDs from the lookup map
 	if teamLookup != nil {
 		homeAbbr := GetTeamAbbreviation(liveGame.HomeTeam)
 		awayAbbr := GetTeamAbbreviation(liveGame.AwayTeam)
-		
+
 		if id, ok := teamLookup[homeAbbr]; ok {
 			game.HomeTeamID = id
 		}
@@ -301,7 +301,7 @@ func ConvertToStoreGameWithTeams(liveGame LiveGame, seasonID int, teamLookup map
 			game.AwayTeamID = id
 		}
 	}
-	
+
 	return game
 }
 
